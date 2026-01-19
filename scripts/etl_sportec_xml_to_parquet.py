@@ -6,6 +6,8 @@ from tqdm import tqdm
 
 import pandas as pd
 
+RDF_PATH = "/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec"
+
 def tracking_wide_to_long(df: pd.DataFrame) -> pd.DataFrame:
     """
     Converts wide kloppy output of tracking data to more manageable long format
@@ -66,8 +68,8 @@ def add_ball_rows(df_wide: pd.DataFrame, players_long: pd.DataFrame) -> pd.DataF
     return out.drop(columns = ["ball_x", "ball_y", "ball_z", "ball_speed"])
 
 def main():
-    root_path = "../../../rdf/sp161/shared/soccer-decision-making-r/sportec"
-    games = os.listdir("../../../rdf/sp161/shared/soccer-decision-making-r/sportec/tracking/xml")
+    root_path = f"{RDF_PATH}"
+    games = os.listdir(f"{RDF_PATH}/tracking/xml")
     dfs = []
     for game in tqdm(games):
         event = sportec.load_event(
@@ -117,5 +119,6 @@ def main():
     all_track.to_parquet(f"{root_path}/passes.parquet")
 
 if __name__ == "__main__":
+    #script will take ~6 hrs for all 306 matches
     main()
 
