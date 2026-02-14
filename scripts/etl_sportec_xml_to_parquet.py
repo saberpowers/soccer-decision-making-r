@@ -33,7 +33,8 @@ def build_player_map(path: str) -> dict:
 
 
 def get_reception_frame(row : pd.Series , tracking : pd.DataFrame, oob_df : pd.DataFrame) -> int:
-    """Gets reception frames for a pass based on following rules:
+    """
+    Gets reception frames for a pass based on following rules:
         1. If reception frame is given in data, simply return that frame
         2. If we know who the receiver is (based on the data), take frame between current pass and next event where the receiver is closest
         3. If we know the pass went out, take next frame where the ball is out of bounds
@@ -70,12 +71,12 @@ def get_reception_frame(row : pd.Series , tracking : pd.DataFrame, oob_df : pd.D
         
     #else: perform 20 degree interception approach
     # checks if the angle between the ball velocity at ball pass 
-    pass_x, pass_y = post_frame_track[post_frame_track['frame_id'] == frame][['x_velo', 'y_velo']].iloc[0].values
+    pass_x, pass_y = post_frame_track[post_frame_track['frame_id'] == frame][['ball_x_10frame_forward', 'ball_y_10frame_forward']].iloc[0].values
 
     p = np.array([pass_x, pass_y], dtype=float)
     p_norm = np.linalg.norm(p)
 
-    v = post_frame_track[["x_velo", "y_velo"]].to_numpy(dtype=float)
+    v = post_frame_track[["ball_x_10frame_forward", "ball_y_10frame_forward"]].to_numpy(dtype=float)
     v_norm = np.linalg.norm(v, axis=1)
     dot = v @ p 
 
@@ -143,7 +144,7 @@ def add_ball_rows(df_wide: pd.DataFrame, players_long: pd.DataFrame) -> pd.DataF
     key_cols = ["period_id", "timestamp", "frame_id", "ball_state", "ball_owning_team_id"]
 
     ball_long = (
-        df_wide[key_cols + ["ball_x", "ball_y", "ball_z", "ball_speed"]]
+        df_wide[key_cols + ["ball_x", "ball_y", "ball_z", "ball_speed", "ball_x_10frame_forward", "ball_y_10frame_forward"]]
         .rename(columns={"ball_speed": "s"})
         .assign(
             object_id="BALL",
@@ -175,9 +176,34 @@ def _point_to_segment_dist(px, py, ax, ay, bx, by, eps=1e-12):
     cx, cy = ax + t * abx, ay + t * aby 
     return np.hypot(px - cx, py - cy)
 
+def angle_between_vectors(P, A, B):
+    """
+    Gets angles between vectors AP and AB
+    """
+    P = np.array(P)
+    A = np.array(A)
+    B = np.array(B)
+
+    vec_AP = P - A
+    vec_AB = B - A
+
+    dot_product = np.dot(vec_AP, vec_AB)
+    norm_AP = np.linalg.norm(vec_AP)
+    norm_AB = np.linalg.norm(vec_AB)
+
+    if  norm_AB <= 1e-12:
+        return np.linalg.norm(P - A)
+
+    cos_angle = np.clip(dot_product / (norm_AP * norm_AB), -1.0, 1.0)
+
+    angle_rad = np.arccos(cos_angle)
+    return angle_rad
+
 def get_receiver(row, track_df):
     """
-    Estimating intended receiver of a play based on closest player formed by the line segment between start and end location of passes
+    Estimating intended receiver of a play based on the player 
+    forming the minimum angle between the ball direction from 
+    first 10 frames of passand vector between the ball at release and the player
 
     Inputs:
         row: pd.Series
@@ -187,11 +213,12 @@ def get_receiver(row, track_df):
     Outputs:
         The ID of the intended receiver
     """
-    event = row["EVENT_ID"]
-    team = row["CUID1"]
-    passer = row["PUID1"]
-    if (row['CUID2'] == row['CUID1']) & (pd.notna(row["PUID2"])):
-        return row['PUID2'] #if given, simply return the receiver
+    event = row["event_id"]
+    team = row["team_id"]
+
+    passer = row["player_id"]
+    if row['receiver_player_id'] is not None:
+        return row['receiver_player_id'] #if given, simply return the receiver
     if event not in track_df['event_id'].values:
         return None
     event_track = track_df[track_df['event_id'] == event]
@@ -199,19 +226,19 @@ def get_receiver(row, track_df):
     teammates = event_track[(event_track['player_team'] == team) & (event_track['object_id'] != passer)]
     ball = event_track[event_track['player_team'] == "BALL"].iloc[0]
 
-    start_x, start_y, end_x, end_y = [ball['x'], ball['y'], ball['x_rec'], ball['y_rec']]
+    start_x, start_y, x_tenframe, y_tenframe = [ball['x'], ball['y'], ball['ball_x_10frame_forward'], ball['ball_y_10frame_forward']]
 
     teammates["dist_to_pass"] = teammates.apply(
-        lambda r: _point_to_segment_dist(
-            float(r['x_rec']), float(r['y_rec']), 
-            start_x, start_y, end_x, end_y
+        lambda r: angle_between_vectors(
+            [float(r['x']), float(r['y'])], 
+            [start_x, start_y], [x_tenframe, y_tenframe]
         ),
         axis=1
     )
     receiver_row = teammates.loc[teammates["dist_to_pass"].idxmin()]
     return receiver_row["object_id"]
 
-
+#
 def main():
     root_path = f"{RDF_PATH}"
     games = os.listdir(f"{RDF_PATH}/tracking/xml")
@@ -236,10 +263,10 @@ def main():
 
         player_map = build_player_map(f"{root_path}/match_information/{game}")
 
-        tracking['x_velo'] = tracking['ball_x'] - tracking['ball_x'].shift(-10)
-        tracking['y_velo'] = tracking['ball_y'] - tracking['ball_y'].shift(-10)
-        tracking['x_velo'] = tracking['x_velo'].fillna(0)
-        tracking['y_velo'] = tracking['y_velo'].fillna(0)
+        last_ball_x = tracking['ball_x'].dropna().iloc[-1] if tracking['ball_x'].notna().any() else np.nan
+        last_ball_y = tracking['ball_y'].dropna().iloc[-1] if tracking['ball_y'].notna().any() else np.nan
+        tracking['ball_x_10frame_forward'] = tracking['ball_x'].shift(-10, fill_value=last_ball_x)
+        tracking['ball_y_10frame_forward'] = tracking['ball_y'].shift(-10, fill_value=last_ball_y)
 
         kpi_path = f"{root_path}/KPI_Merged_all/KPI_MGD_{game[:-4]}.csv"
         kpi_df = pd.read_csv(kpi_path ,sep = ';', encoding='latin-1', on_bad_lines='skip')
@@ -265,7 +292,6 @@ def main():
         rec_frame_ball = rec_frame_ball.drop(columns = ["period_id", "timestamp", "ball_state"])       
 
         event_recept = pd.merge(event, rec_frame_ball, left_on = "n_RECFRM", right_on = "frame_id")
-        event_recept['TYPE'] = 'RECEPTION'
         #because of potential velocity computations, we look at tracking 5 frames in the future and past
         t = tracking[tracking['frame_id'].isin(event['FRAME_NUMBER'])]
         c_frame = tracking_wide_to_long(t)
@@ -286,18 +312,21 @@ def main():
         track_frame = track_frame.drop(columns = ["og_FRAME_NUMBER_m5", "og_FRAME_NUMBER",'period_id', 'timestamp', 'ball_state'])
 
         event_track = pd.merge(event, track_frame, left_on = "FRAME_NUMBER", right_on = "frame_id")
-        event_recept = event_recept[["x_velo","y_velo", "object_id", "s", "x", "y","z", "event_id"]]
+        event_recept = event_recept[["ball_x_10frame_forward","ball_y_10frame_forward", "object_id", "s", "x", "y","z", "event_id"]]
         
         all_df = pd.merge(event_track, event_recept, on = ["event_id", "object_id"], suffixes = ["", "_rec"])
         
         all_df['player_team'] = all_df['object_id'].map(player_map)
         all_df = all_df[abs(all_df['frame_id'] - all_df['n_RECFRM']) > 10]
-
-        kpi_df['intended_receiver'] = kpi_df.apply(lambda x: get_receiver(x, all_df), axis = 1)
-        all_df = pd.merge(all_df, kpi_df[["event_id", "intended_receiver"]], on = "event_id")
-        all_df['is_intended'] = all_df['object_id'] == all_df['intended_receiver']
-        all_df.drop(columns= ['intended_receiver'], inplace = True)
-        dfs.append(all_df)
+        try:
+            event['intended_receiver'] = event.apply(lambda x: get_receiver(x, all_df), axis = 1)
+            all_df = pd.merge(all_df, event[["event_id", "intended_receiver"]], on = "event_id")
+            all_df['is_intended'] = all_df['object_id'] == all_df['intended_receiver']
+            all_df.drop(columns= ['intended_receiver'], inplace = True)
+            dfs.append(all_df)
+        except:
+            print(game)
+            traceback.print_exc()
 
     all_track = pd.concat(dfs) #needs pyarrow
     all_track.to_parquet(f"{root_path}/passes.parquet")
@@ -305,4 +334,3 @@ def main():
 if __name__ == "__main__":
     #script will take ~7 hrs for all 306 matches
     main()
-
