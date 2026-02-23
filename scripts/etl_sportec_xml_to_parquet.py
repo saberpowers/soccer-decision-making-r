@@ -11,12 +11,12 @@ import numpy as np
 RDF_PATH = "/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec"
 
 
-
-def build_player_map(path: str) -> dict:
+def build_player_map(path: str) -> tuple:
     tree = etree.parse(path)
     root = tree.getroot()
 
-    data = {}
+    team_data = {}
+    positions = {}
     teams = root.xpath(".//Team")
 
     for team in teams:
@@ -25,11 +25,12 @@ def build_player_map(path: str) -> dict:
 
         for player in players:
             person_id = player.get("PersonId")
-            data[person_id] = team_id
+            position = player.get("PlayingPosition")
+            team_data[person_id] = team_id
+            positions[person_id] = position
 
-    data["BALL"] = "BALL"
-    return data
-
+    team_data["BALL"] = "BALL"
+    return team_data, positions
 
 
 def get_reception_frame(row : pd.Series , tracking : pd.DataFrame, oob_df : pd.DataFrame) -> int:
@@ -261,7 +262,7 @@ def main():
             only_alive=False,
         ).to_df()
 
-        player_map = build_player_map(f"{root_path}/match_information/{game}")
+        player_map, position_map = build_player_map(f"{root_path}/match_information/{game}")
 
         last_ball_x = tracking['ball_x'].dropna().iloc[-1] if tracking['ball_x'].notna().any() else np.nan
         last_ball_y = tracking['ball_y'].dropna().iloc[-1] if tracking['ball_y'].notna().any() else np.nan
@@ -285,40 +286,44 @@ def main():
         event_frame_map = kpi_df[['EVENT_ID', 'FRAME_NUMBER', 'n_RECFRM']]
 
         event = pd.merge(event, event_frame_map, left_on = "event_id", right_on = "EVENT_ID")
-
-        t = tracking[tracking['frame_id'].isin(event['n_RECFRM'])]
+        keys = event[['n_RECFRM', 'period_id']].drop_duplicates()
+        t = tracking.merge(keys, left_on = ['frame_id', 'period_id'],right_on=['n_RECFRM', 'period_id'], how='inner')
         rec_frame = tracking_wide_to_long(t)
         rec_frame_ball = add_ball_rows(t, rec_frame)
         rec_frame_ball = rec_frame_ball.drop(columns = ["period_id", "timestamp", "ball_state"])       
 
         event_recept = pd.merge(event, rec_frame_ball, left_on = "n_RECFRM", right_on = "frame_id")
         #because of potential velocity computations, we look at tracking 5 frames in the future and past
-        t = tracking[tracking['frame_id'].isin(event['FRAME_NUMBER'])]
+        keys = event[['FRAME_NUMBER', 'period_id']].drop_duplicates()
+        t = tracking.merge(keys, left_on = ['frame_id', 'period_id'],right_on=['FRAME_NUMBER', 'period_id'], how='inner')
         c_frame = tracking_wide_to_long(t)
         c_frame_ball = add_ball_rows(t, c_frame)
-        t = tracking[tracking['frame_id'].isin(event['FRAME_NUMBER'] + 5)]
+        keys['FRAME_NUMBER'] = keys['FRAME_NUMBER'] + 5
+        t = tracking.merge(keys, left_on = ['frame_id', 'period_id'],right_on=['FRAME_NUMBER', 'period_id'], how='inner')
         p5_frame = tracking_wide_to_long(t)
         p5_frame_ball = add_ball_rows(t, p5_frame)
-
-        t = tracking[tracking['frame_id'].isin(event['FRAME_NUMBER'] - 5)]
+        keys['FRAME_NUMBER'] = keys['FRAME_NUMBER'] - 10
+        t = tracking.merge(keys, left_on = ['frame_id', 'period_id'],right_on=['FRAME_NUMBER', 'period_id'], how='inner')
+    
         m5_frame = tracking_wide_to_long(t)
         m5_frame_ball = add_ball_rows(t, m5_frame)
 
         p5_frame_ball['og_FRAME_NUMBER'] = p5_frame_ball['frame_id'] - 5
         m5_frame_ball['og_FRAME_NUMBER'] = m5_frame_ball['frame_id'] + 5
 
-        track_frame = pd.merge(c_frame_ball, p5_frame_ball, left_on = ["frame_id", "object_id"], right_on = ["og_FRAME_NUMBER", "object_id"], suffixes = ["", "_p5"])
-        track_frame = pd.merge(track_frame, m5_frame_ball, left_on = ["frame_id", "object_id"], right_on = ["og_FRAME_NUMBER", "object_id"], suffixes = ["", "_m5"])
-        track_frame = track_frame.drop(columns = ["og_FRAME_NUMBER_m5", "og_FRAME_NUMBER",'period_id', 'timestamp', 'ball_state'])
+        track_frame = pd.merge(c_frame_ball, p5_frame_ball, left_on = ["frame_id", "object_id", "period_id"], right_on = ["og_FRAME_NUMBER", "object_id", "period_id"], suffixes = ["", "_p5"])
+        track_frame = pd.merge(track_frame, m5_frame_ball, left_on = ["frame_id", "object_id", "period_id"], right_on = ["og_FRAME_NUMBER", "object_id", "period_id"], suffixes = ["", "_m5"])
+        track_frame = track_frame.drop(columns = ["og_FRAME_NUMBER_m5", "og_FRAME_NUMBER", 'timestamp', 'ball_state'])
 
-        event_track = pd.merge(event, track_frame, left_on = "FRAME_NUMBER", right_on = "frame_id")
+        event_track = pd.merge(event, track_frame, left_on = ["FRAME_NUMBER", "period_id"], right_on = ["frame_id", "period_id"])
         event_recept = event_recept[["ball_x_10frame_forward","ball_y_10frame_forward", "object_id", "s", "x", "y","z", "event_id"]]
         
         all_df = pd.merge(event_track, event_recept, on = ["event_id", "object_id"], suffixes = ["", "_rec"])
-        
-        all_df['player_team'] = all_df['object_id'].map(player_map)
-        all_df = all_df[abs(all_df['frame_id'] - all_df['n_RECFRM']) > 10]
         try:
+            all_df['player_team'] = all_df['object_id'].map(player_map)
+            all_df['position'] = all_df['object_id'].map(position_map)
+            all_df = all_df[abs(all_df['frame_id'] - all_df['n_RECFRM']) > 10]
+        
             event['intended_receiver'] = event.apply(lambda x: get_receiver(x, all_df), axis = 1)
             all_df = pd.merge(all_df, event[["event_id", "intended_receiver"]], on = "event_id")
             all_df['is_intended'] = all_df['object_id'] == all_df['intended_receiver']
