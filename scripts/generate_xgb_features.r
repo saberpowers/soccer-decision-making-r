@@ -238,6 +238,7 @@ calculate_angles_front_behind <- function(intended, f2b2_df){
     select(angle, object_id)
 }
 
+<<<<<<< HEAD
 #' Relative Velocity Of Selected Players Vs Intended Receiver
 #'
 #' Computes x/y relative velocities for selected players against the intended
@@ -248,6 +249,9 @@ calculate_angles_front_behind <- function(intended, f2b2_df){
 #'
 #' @return A tibble with `x_rel_velo`, `y_rel_velo`, and `object_id`.
 calc_rel_velos_front_behind <- function(intended, t2_def) {
+=======
+calc_f2b2_rel_velos <- function(intended, t2_def) {
+>>>>>>> bbe42b5 (adding feat generation)
     bind_cols(
     intended |> select(x1_velo = x_velo, y1_velo = y_velo),
     t2_def |> select(x2_velo = x_velo, y2_velo = y_velo, object_id)
@@ -257,6 +261,7 @@ calc_rel_velos_front_behind <- function(intended, t2_def) {
       y_rel_velo = y2_velo - y1_velo) |> select(x_rel_velo, y_rel_velo, object_id)
 }
 
+<<<<<<< HEAD
 #' Receiver-Defender Feature Block
 #'
 #' Builds features for up to two nearest defenders in front of and behind the
@@ -284,13 +289,32 @@ calc_receiver_defender_feats <- function(event_df, opponent_df, teammate_df, int
 
   ## relative velocity
   rel_vels <- calc_rel_velos_front_behind(intended, t2_def)
+=======
+calc_receiver_defender_feats <- function(event_df, opponent_df, teammate_df, intended, ball) {
+
+  t2_def <- opponent_df |>
+    get_f2_b2_players(ball, intended)
+  ##distance
+
+  dists <- calc_f2b2_dists(intended, t2_def)
+
+  ## angle
+  angles <- calc_f2b2_angles(intended, t2_def)
+
+  ## relative velocity
+  rel_vels <- calc_f2b2_rel_velos(intended, t2_def)
+>>>>>>> bbe42b5 (adding feat generation)
   #angle formed by passer, intended receiver, and defender (1 feature)
   pid_angles <- bind_cols(
     intended |> select(i_x = x, i_y = y),
     event_df |> filter(player_id == object_id) |> select(p_x = x, p_y = y),
     t2_def |> select(d_x = x, d_y = y,  object_id)
   ) |>
+<<<<<<< HEAD
     mutate(pid_angle = get_angle_AB_BC(p_x, p_y, i_x, i_y, d_x, d_y)) |>
+=======
+    mutate(pid_angle = angle_12_23(p_x, p_y, i_x, i_y, d_x, d_y)) |>
+>>>>>>> bbe42b5 (adding feat generation)
     select(pid_angle, object_id)
 
   opp_defs <- list(dists, angles, rel_vels, pid_angles) 
@@ -312,6 +336,7 @@ calc_receiver_defender_feats <- function(event_df, opponent_df, teammate_df, int
       )
   }
 
+<<<<<<< HEAD
 #' Receiver-Teammate Feature Block
 #'
 #' Builds features for up to two nearest teammates in front of and behind the
@@ -331,6 +356,20 @@ calc_receiver_attacker_feats <- function(event_df, teammates, ball, opponent_df,
   dists <- calc_dists_front_behind(intended, t2_att)
   ## angle
   angles <- calculate_angles_front_behind(intended, t2_att)
+=======
+# For 2 teammates nearest to the intended receiver in front and behind the ball
+
+# distance, angle (relative to goal) between intended receiver and teammate (2 features)
+# angle formed by passer, intended receiver, and teammate (1 feature)
+# distance, angle (relative to angle to goal), relative velocity between teammate and nearest opponent (4 features)
+
+calc_receiver_attacker_feats <- function(event_df, teammates, ball, opponent_df, intended) {
+  t2_att <- teammates |> get_f2_b2_players(ball, intended)
+  # distance, angle (relative to goal) between intended receiver and teammate (2 features)
+  dists <- calc_f2b2_dists(intended, t2_att)
+  ## angle
+  angles <- calc_f2b2_angles(intended, t2_att)
+>>>>>>> bbe42b5 (adding feat generation)
 
     # angle formed by passer, intended receiver, and teammate (1 feature)
 
@@ -338,7 +377,11 @@ calc_receiver_attacker_feats <- function(event_df, teammates, ball, opponent_df,
     event_df |> filter(is_intended) |> select(i_x = x, i_y = y),
     event_df |> filter(player_id == object_id) |> select(p_x = x, p_y = y),
     t2_att |> select(d_x = x, d_y = y, object_id)) |>
+<<<<<<< HEAD
     mutate(pit_angle = get_angle_AB_BC(p_x, p_y, i_x, i_y, d_x, d_y)) |>
+=======
+    mutate(pit_angle = angle_12_23(p_x, p_y, i_x, i_y, d_x, d_y)) |>
+>>>>>>> bbe42b5 (adding feat generation)
     select(pit_angle, object_id)
 
   # distance, angle (relative to angle to goal), relative velocity between teammate and nearest opponent (4 features)
@@ -382,6 +425,7 @@ calc_receiver_attacker_feats <- function(event_df, teammates, ball, opponent_df,
   return(tm_feats)
 }
 
+<<<<<<< HEAD
 
 #' Build Model Features For A Single Pass Event
 #'
@@ -402,6 +446,8 @@ calc_receiver_attacker_feats <- function(event_df, teammates, ball, opponent_df,
 #'
 #' @return A one-row tibble of engineered features for the event. Returns an
 #'   empty tibble when the event has no ball row or no intended receiver row.
+=======
+>>>>>>> bbe42b5 (adding feat generation)
 calc_event_features <- function(event_df) {
   event_df <- flip_event(event_df)
   
@@ -414,15 +460,24 @@ calc_event_features <- function(event_df) {
     return(tibble())
   }
   
+<<<<<<< HEAD
   calc_location_feats(event_df, intended) |>
     bind_cols(
       calc_passer_intended_feats(event_df, opponent_df, teammate_df),
+=======
+  calc_passer_intended_feats(event_df, opponent_df, teammate_df) |>
+    bind_cols(
+>>>>>>> bbe42b5 (adding feat generation)
       calc_receiver_defender_feats(event_df, opponent_df, teammate_df, intended, ball),
       calc_receiver_attacker_feats(event_df, teammate_df, ball, opponent_df, intended)
     )
 }
 
+<<<<<<< HEAD
 goal_coords <- c(x = 52.5, y = 0)
+=======
+goal_coords = c(x = 52.5, y = 0)
+>>>>>>> bbe42b5 (adding feat generation)
 frames <- read_parquet("/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec/passes.parquet") |> filter(is.na(set_piece_type)) |> mutate(
   x_velo = x_p5 - x_m5,
   y_velo = y_p5 - y_m5
@@ -453,7 +508,10 @@ pb <- progress_bar$new(
   show_after = 0,
   stream = stderr()
 )
+<<<<<<< HEAD
 
+=======
+>>>>>>> bbe42b5 (adding feat generation)
 print("Finshed event data, calculating features...")
 feats_all <- map_dfr(event_groups, function(event_df) {
   eid <- event_df$event_id[[1]]
@@ -470,4 +528,9 @@ feats_all <- map_dfr(event_groups, function(event_df) {
     }
   )
 })
+<<<<<<< HEAD
 write.csv(feats_all, "/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec/xgb_features.csv", row.names = TRUE)
+=======
+
+cli_progress_done(pb)
+>>>>>>> bbe42b5 (adding feat generation)
