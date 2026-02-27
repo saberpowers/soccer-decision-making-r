@@ -64,11 +64,12 @@ def get_reception_frame(row : pd.Series , tracking : pd.DataFrame, oob_df : pd.D
         post_frame_track['ball_dist'] = (post_frame_track['ball_x'] - post_frame_track[f'{recept_player}_x'])**2 + (post_frame_track['ball_y'] - post_frame_track[f'{recept_player}_y'])**2
         min_index = post_frame_track['ball_dist'].idxmin()
         return post_frame_track.loc[min_index, 'frame_id']
+    oob = oob_df[oob_df['frame_id'] >= frame]
+    next_oob = oob['frame_id'].iloc[0] if oob['frame_id'].shape[0] > 0 else tracking['frame_id'].max()
     if row['result'] == 'OUT':
         #if we know it went out, take next out frame
-        oob = oob_df[oob_df['frame_id'] >= frame]
         if oob.shape[0] > 0:
-            return oob['frame_id'].iloc[0]
+            return next_oob
         
     #else: perform 20 degree interception approach
     # checks if the angle between the ball velocity at ball pass 
@@ -96,8 +97,9 @@ def get_reception_frame(row : pd.Series , tracking : pd.DataFrame, oob_df : pd.D
     if over_twenty.shape[0] == 0:
         # if no such frame, simply take 2 seconds from pass
         return min(row['NEXT_FRAME'], frame + 50, tracking['frame_id'].max())
-    
-    return over_twenty['frame_id'].iloc[0]
+    #weird edge case exists with ball being out of bounds, or with 4 seconds
+
+    return min(over_twenty['frame_id'].iloc[0], next_oob, frame + 100, tracking['frame_id'].max())
 
 
 def tracking_wide_to_long(df: pd.DataFrame) -> pd.DataFrame:
@@ -218,6 +220,8 @@ def get_receiver(row, track_df):
     team = row["team_id"]
 
     passer = row["player_id"]
+    if passer is None: #no passer identified
+        return None
     if row['receiver_player_id'] is not None:
         return row['receiver_player_id'] #if given, simply return the receiver
     if event not in track_df['event_id'].values:
@@ -232,7 +236,7 @@ def get_receiver(row, track_df):
     teammates["dist_to_pass"] = teammates.apply(
         lambda r: angle_between_vectors(
             [float(r['x']), float(r['y'])], 
-            [start_x, start_y], [x_tenframe, y_tenframe]
+            [x_tenframe, y_tenframe], [start_x, start_y]
         ),
         axis=1
     )
@@ -244,6 +248,7 @@ def main():
     root_path = f"{RDF_PATH}"
     games = os.listdir(f"{RDF_PATH}/tracking/xml")
     dfs = []
+
     for game in tqdm(games):
         event = sportec.load_event(
             event_data= f"{root_path}/event/{game}",
@@ -279,7 +284,7 @@ def main():
         
         kpi_df = pd.merge(kpi_df, event[['event_id', 'result']], left_on = "EVENT_ID", right_on = "event_id").sort_values(by = "FRAME_NUMBER")
 
-        oob_df = tracking[(abs(tracking['ball_x']) > (105/2 -.02)) | (abs(tracking['ball_y']) > (34 -.02))] #small tolerance for tracking issues
+        oob_df = tracking[(abs(tracking['ball_x']) > (105/2 -.1)) | (abs(tracking['ball_y']) > (34 -.1))] #small tolerance for tracking issues
 
         kpi_df['n_RECFRM'] = kpi_df.apply(lambda x: get_reception_frame(x, tracking, oob_df), axis = 1)
 
@@ -319,16 +324,17 @@ def main():
         event_recept = event_recept[["ball_x_10frame_forward","ball_y_10frame_forward", "object_id", "s", "x", "y","z", "event_id"]]
         
         all_df = pd.merge(event_track, event_recept, on = ["event_id", "object_id"], suffixes = ["", "_rec"])
+        all_df['player_team'] = all_df['object_id'].map(player_map)
+        all_df['position'] = all_df['object_id'].map(position_map)
         try:
-            all_df['player_team'] = all_df['object_id'].map(player_map)
-            all_df['position'] = all_df['object_id'].map(position_map)
             all_df = all_df[abs(all_df['frame_id'] - all_df['n_RECFRM']) > 10]
         
             event['intended_receiver'] = event.apply(lambda x: get_receiver(x, all_df), axis = 1)
+            event = event[event['intended_receiver'].notnull()] #removing passes where we don't have a passer
             all_df = pd.merge(all_df, event[["event_id", "intended_receiver"]], on = "event_id")
             all_df['is_intended'] = all_df['object_id'] == all_df['intended_receiver']
             all_df.drop(columns= ['intended_receiver'], inplace = True)
-            dfs.append(all_df)
+            dfs.append(all_df) 
         except:
             print(game)
             traceback.print_exc()
