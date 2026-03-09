@@ -65,6 +65,7 @@ def get_reception_frame(row : pd.Series , tracking : pd.DataFrame, oob_df : pd.D
         min_index = post_frame_track['ball_dist'].idxmin()
         return post_frame_track.loc[min_index, 'frame_id']
     oob = oob_df[oob_df['frame_id'] >= frame]
+    #take next frame where ball is out of bounds, if no such frame exists, take the last frame
     next_oob = oob['frame_id'].iloc[0] if oob['frame_id'].shape[0] > 0 else tracking['frame_id'].max()
     if row['result'] == 'OUT':
         #if we know it went out, take next out frame
@@ -227,7 +228,7 @@ def get_receiver(row, track_df):
     if event not in track_df['event_id'].values:
         return None
     event_track = track_df[track_df['event_id'] == event]
-    # if not, take closest to line segment between start and end location
+    # if not, takem inimum angle
     teammates = event_track[(event_track['player_team'] == team) & (event_track['object_id'] != passer)]
     ball = event_track[event_track['player_team'] == "BALL"].iloc[0]
 
@@ -236,7 +237,7 @@ def get_receiver(row, track_df):
     teammates["dist_to_pass"] = teammates.apply(
         lambda r: angle_between_vectors(
             [float(r['x']), float(r['y'])], 
-            [x_tenframe, y_tenframe], [start_x, start_y]
+            [start_x, start_y], [x_tenframe, y_tenframe]
         ),
         axis=1
     )
@@ -248,7 +249,6 @@ def main():
     root_path = f"{RDF_PATH}"
     games = os.listdir(f"{RDF_PATH}/tracking/xml")
     dfs = []
-
     for game in tqdm(games):
         event = sportec.load_event(
             event_data= f"{root_path}/event/{game}",

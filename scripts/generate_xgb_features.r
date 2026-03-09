@@ -7,7 +7,7 @@ library(tidyr)
 library(purrr)
 library(progress)
 
-#Progression features
+# Progression features
 #' Normalize Event Orientation And Add Goal Distance
 #'
 #' Flips x-axis coordinates for all tracked objects in an event when the
@@ -22,8 +22,9 @@ library(progress)
 #' @return A tibble with possibly flipped x-related fields and a new
 #'   `dist_from_goal` column.
 flip_event <- function(event_df){
-  gk_x <- event_df |> filter(position == 'TW' & player_team == team_id) |> pull(x)
-  needs_flip <- length(gk_x) > 0 && gk_x[[1]] > 0
+  gk_x_t <- event_df |> filter(position == 'TW' & player_team == team_id) |> pull(x)
+  gk_x_opp <- event_df |> filter(position == 'TW' & player_team != team_id) |> pull(x)
+  needs_flip <- length(gk_x_t) > 0 && (gk_x_t[[1]] > gk_x_opp[[1]])
 
   if (needs_flip) {
     event_df <- event_df |>
@@ -76,13 +77,12 @@ calc_location_feats <- function(event_df, intended) {
       p_dist_from_goal = passer_dist_from_goal,
       p_angle = passer_angle,
       i_dist_from_goal = intended_dist_from_goal,
-      i_angle <- intended_angle,
-      i_x_velo <- intended_x_velo,
-      i_y_velo <- intended_y_velo,
+      i_angle = intended_angle,
+      i_x_velo = intended_x_velo,
+      i_y_velo = intended_y_velo
     )
   }
 
-#distance, angle (relative to angle to goal), relative velocity between passer and intended receiver (4 features)
 #' Angle Difference Relative To Goal Direction
 #'
 #' Computes the absolute angle (in degrees) between vectors from two points
@@ -113,32 +113,31 @@ get_angle_rel_goal <- function(x1, y1, x2, y2) {
 #' @return A one-row data frame with passer/receiver scalar features.
 calc_passer_intended_feats <- function(event_df, opponent_df, teammate_df) {
 
-  ##distance
+  
 
   passer_receiver <- event_df |> filter(object_id == player_id | is_intended) 
 
 
-  ## angle
+  
   passer <- passer_receiver |> filter(object_id == player_id)
   receiver <- passer_receiver |> filter(is_intended)
+  ##distance
   pr_distance <- sqrt((passer$x[[1]] - receiver$x[[1]])^2 + (passer$y[[1]] - receiver$y[[1]])^2)
-
+  ## angle
   pr_angle <- get_angle_rel_goal(passer$x, passer$y, receiver$x, receiver$y)
-
-  #angle_deg
 
   ## relative velocity
 
   pr_x_rel_velo = passer$x_velo - receiver$x_velo
   pr_y_rel_velo = passer$y_velo - receiver$y_velo 
 
-  #number of attackers between passer and intended receiver (1 feature)
+  
 
   closer_to_goal = min(passer$dist_from_goal, receiver$dist_from_goal)
   further_to_goal = max(passer$dist_from_goal, receiver$dist_from_goal)
 
+  #number of attackers between passer and intended receiver (1 feature)
   num_att_pr <- teammate_df |> filter(closer_to_goal < dist_from_goal, further_to_goal > dist_from_goal) |> nrow()
-
   #number of defenders between passer and intended receiver (1 feature)
   num_def_pr <- opponent_df |> filter(closer_to_goal < dist_from_goal, further_to_goal > dist_from_goal) |> nrow()
   #number of attackers between intended receiver and goal (1 feature)
@@ -158,19 +157,17 @@ calc_passer_intended_feats <- function(event_df, opponent_df, teammate_df) {
     num_def_rg = num_def_rg))
 }
 
-
-#distance, angle (relative to goal), relative velocity between intended receiver and defender (4 features)
 #' Angle At Middle Point From Three Coordinates
 #'
-#' Computes the angle (in degrees) at point 2 formed by segments 2->1 and 2->3.
+#' Computes the angle (in degrees) at point B formed by segments B->A and B->C.
 #' Returns `NA_real_` for zero-length segments.
 #'
-#' @param x1,y1 Numeric coordinates for point 1.
-#' @param x2,y2 Numeric coordinates for point 2 (vertex).
-#' @param x3,y3 Numeric coordinates for point 3.
+#' @param x1,y1 Numeric coordinates for point A.
+#' @param x2,y2 Numeric coordinates for point B (vertex).
+#' @param x3,y3 Numeric coordinates for point C.
 #'
 #' @return Numeric angle in degrees, possibly `NA_real_`.
-angle_12_23 <- function(x1, y1, x2, y2, x3, y3) {
+get_angle_AB_BC <- function(x1, y1, x2, y2, x3, y3) {
   v21x <- x1 - x2
   v21y <- y1 - y2
   v23x <- x3 - x2
@@ -193,9 +190,9 @@ angle_12_23 <- function(x1, y1, x2, y2, x3, y3) {
 #'
 #' @return A tibble with selected players and helper columns
 #'   `dist_from_intended` and `infront`.
-get_f2_b2_players <- function(df, ball, intended){
+get_players_front_behind <- function(df, ball, intended){
   df |>
-    filter(position != "TW", object_id != player_id, !is_intended) |>
+    filter(position != "TW", object_id != player_id, !is_intended) |> #Removing goalkeeper, passer, and intended receiver; TW = Goalkeeper
     cross_join(ball, suffix = c("", "_ball")) |>
     cross_join(intended, suffix = c("", "_intended")) |>
     mutate(
@@ -210,14 +207,14 @@ get_f2_b2_players <- function(df, ball, intended){
 #' Distances Between Intended Receiver And Selected Players
 #'
 #' Computes Euclidean distance between intended receiver and each selected
-#' player returned by `get_f2_b2_players()`.
+#' player returned by `get_players_front_behind()`.
 #'
 #' @param intended Intended receiver row(s) with `x` and `y`.
 #' @param f2b2_df Selected player rows with `x`, `y`, `object_id`, `infront`,
 #'   and `dist_from_intended`.
 #'
 #' @return A tibble with `dist`, `object_id`, `infront`, `dist_from_intended`.
-calc_f2b2_dists <- function(intended, f2b2_df){
+calc_dists_front_behind <- function(intended, f2b2_df){
   bind_cols(
   intended |> select(x1 = x, y1 = y),
   f2b2_df |> select(x2 = x, y2 = y, object_id, infront, dist_from_intended)) |>
@@ -233,7 +230,7 @@ calc_f2b2_dists <- function(intended, f2b2_df){
 #' @param f2b2_df Selected player rows with `x`, `y`, and `object_id`.
 #'
 #' @return A tibble with `angle` and `object_id`.
-calc_f2b2_angles <- function(intended, f2b2_df){
+calculate_angles_front_behind <- function(intended, f2b2_df){
   bind_cols(
     intended |> select(x1 = x, y1 = y),
     f2b2_df |> select(x2 = x, y2 = y, object_id)) |>
@@ -250,7 +247,7 @@ calc_f2b2_angles <- function(intended, f2b2_df){
 #' @param t2_def Selected player rows with `x_velo`, `y_velo`, and `object_id`.
 #'
 #' @return A tibble with `x_rel_velo`, `y_rel_velo`, and `object_id`.
-calc_f2b2_rel_velos <- function(intended, t2_def) {
+calc_rel_velos_front_behind <- function(intended, t2_def) {
     bind_cols(
     intended |> select(x1_velo = x_velo, y1_velo = y_velo),
     t2_def |> select(x2_velo = x_velo, y2_velo = y_velo, object_id)
@@ -277,23 +274,23 @@ calc_f2b2_rel_velos <- function(intended, t2_def) {
 calc_receiver_defender_feats <- function(event_df, opponent_df, teammate_df, intended, ball) {
 
   t2_def <- opponent_df |>
-    get_f2_b2_players(ball, intended)
+    get_players_front_behind(ball, intended)
   ##distance
 
-  dists <- calc_f2b2_dists(intended, t2_def)
+  dists <- calc_dists_front_behind(intended, t2_def)
 
   ## angle
-  angles <- calc_f2b2_angles(intended, t2_def)
+  angles <- calculate_angles_front_behind(intended, t2_def)
 
   ## relative velocity
-  rel_vels <- calc_f2b2_rel_velos(intended, t2_def)
+  rel_vels <- calc_rel_velos_front_behind(intended, t2_def)
   #angle formed by passer, intended receiver, and defender (1 feature)
   pid_angles <- bind_cols(
     intended |> select(i_x = x, i_y = y),
     event_df |> filter(player_id == object_id) |> select(p_x = x, p_y = y),
     t2_def |> select(d_x = x, d_y = y,  object_id)
   ) |>
-    mutate(pid_angle = angle_12_23(p_x, p_y, i_x, i_y, d_x, d_y)) |>
+    mutate(pid_angle = get_angle_AB_BC(p_x, p_y, i_x, i_y, d_x, d_y)) |>
     select(pid_angle, object_id)
 
   opp_defs <- list(dists, angles, rel_vels, pid_angles) 
@@ -315,12 +312,6 @@ calc_receiver_defender_feats <- function(event_df, opponent_df, teammate_df, int
       )
   }
 
-# For 2 teammates nearest to the intended receiver in front and behind the ball
-
-# distance, angle (relative to goal) between intended receiver and teammate (2 features)
-# angle formed by passer, intended receiver, and teammate (1 feature)
-# distance, angle (relative to angle to goal), relative velocity between teammate and nearest opponent (4 features)
-
 #' Receiver-Teammate Feature Block
 #'
 #' Builds features for up to two nearest teammates in front of and behind the
@@ -335,11 +326,11 @@ calc_receiver_defender_feats <- function(event_df, opponent_df, teammate_df, int
 #'
 #' @return A one-row wide tibble with teammate feature columns suffixed `_o`.
 calc_receiver_attacker_feats <- function(event_df, teammates, ball, opponent_df, intended) {
-  t2_att <- teammates |> get_f2_b2_players(ball, intended)
+  t2_att <- teammates |> get_players_front_behind(ball, intended)
   # distance, angle (relative to goal) between intended receiver and teammate (2 features)
-  dists <- calc_f2b2_dists(intended, t2_att)
+  dists <- calc_dists_front_behind(intended, t2_att)
   ## angle
-  angles <- calc_f2b2_angles(intended, t2_att)
+  angles <- calculate_angles_front_behind(intended, t2_att)
 
     # angle formed by passer, intended receiver, and teammate (1 feature)
 
@@ -347,7 +338,7 @@ calc_receiver_attacker_feats <- function(event_df, teammates, ball, opponent_df,
     event_df |> filter(is_intended) |> select(i_x = x, i_y = y),
     event_df |> filter(player_id == object_id) |> select(p_x = x, p_y = y),
     t2_att |> select(d_x = x, d_y = y, object_id)) |>
-    mutate(pit_angle = angle_12_23(p_x, p_y, i_x, i_y, d_x, d_y)) |>
+    mutate(pit_angle = get_angle_AB_BC(p_x, p_y, i_x, i_y, d_x, d_y)) |>
     select(pit_angle, object_id)
 
   # distance, angle (relative to angle to goal), relative velocity between teammate and nearest opponent (4 features)
@@ -392,6 +383,25 @@ calc_receiver_attacker_feats <- function(event_df, teammates, ball, opponent_df,
 }
 
 
+#' Build Model Features For A Single Pass Event
+#'
+#' Computes the full feature vector used for XGBoost modeling from one
+#' event-level tracking frame. The event is first normalized with
+#' `flip_event()` to standardize attacking direction, then split into teammate,
+#' opponent, ball, and intended-receiver subsets. Feature blocks are assembled
+#' by combining:
+#' - passer/intended receiver location features (`calc_location_feats()`)
+#' - passer-to-intended interaction features (`calc_passer_intended_feats()`)
+#' - intended-vs-defender neighborhood features (`calc_receiver_defender_feats()`)
+#' - intended-vs-teammate neighborhood features (`calc_receiver_attacker_feats()`)
+#'
+#' @param event_df A data frame/tibble containing all tracked rows for one
+#'   event. Expected columns include role/identity fields (for example
+#'   `player_team`, `team_id`, `object_id`, `player_id`, `is_intended`,
+#'   `position`) and kinematic fields used by downstream feature functions.
+#'
+#' @return A one-row tibble of engineered features for the event. Returns an
+#'   empty tibble when the event has no ball row or no intended receiver row.
 calc_event_features <- function(event_df) {
   event_df <- flip_event(event_df)
   
@@ -412,7 +422,7 @@ calc_event_features <- function(event_df) {
     )
 }
 
-goal_coords = c(x = 52.5, y = 0)
+goal_coords <- c(x = 52.5, y = 0)
 frames <- read_parquet("/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec/passes.parquet") |> filter(is.na(set_piece_type)) |> mutate(
   x_velo = x_p5 - x_m5,
   y_velo = y_p5 - y_m5
@@ -461,4 +471,3 @@ feats_all <- map_dfr(event_groups, function(event_df) {
   )
 })
 write.csv(feats_all, "/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec/xgb_features.csv", row.names = TRUE)
-
