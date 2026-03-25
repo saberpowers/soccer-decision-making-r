@@ -414,14 +414,9 @@ calc_event_features <- function(event_df) {
     return(tibble())
   }
   
-<<<<<<< HEAD
   calc_location_feats(event_df, intended) |>
     bind_cols(
       calc_passer_intended_feats(event_df, opponent_df, teammate_df),
-=======
-  calc_passer_intended_feats(event_df, opponent_df, teammate_df) |>
-    bind_cols(
->>>>>>> bbe42b5 (adding feat generation)
       calc_receiver_defender_feats(event_df, opponent_df, teammate_df, intended, ball),
       calc_receiver_attacker_feats(event_df, teammate_df, ball, opponent_df, intended)
     )
