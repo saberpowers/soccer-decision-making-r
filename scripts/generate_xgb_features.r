@@ -453,6 +453,7 @@ pb <- progress_bar$new(
   show_after = 0,
   stream = stderr()
 )
+
 print("Finshed event data, calculating features...")
 feats_all <- map_dfr(event_groups, function(event_df) {
   eid <- event_df$event_id[[1]]
