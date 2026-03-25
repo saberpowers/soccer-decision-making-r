@@ -9,6 +9,19 @@ library(progress)
 library(xgboost)
 library(bit64)
 
+#' Expand One Pass Event Into Receiver Candidates
+#'
+#' Duplicates an event's attacking teammates so each non-passer attacker is
+#' treated as a candidate intended receiver. Each duplicated event gets a unique
+#' `event_id` of the form `<event>_<object_id>` and an `is_intended` flag.
+#'
+#' @param event_df A tibble containing tracking rows for a single pass event.
+#'   Expected columns include `player_side`, `object_id`, and `player_id`.
+#' @param event The original event identifier used as the prefix for generated
+#'   candidate `event_id` values.
+#'
+#' @return A tibble combining one copy of `event_df` per candidate receiver,
+#'   with updated `event_id` and `is_intended` columns.
 build_features <- function(event_df, event) {
   team <- event_df |> filter(player_side == "ATTACK", object_id != player_id)
   players <- team |> pull(object_id) |> unique()
@@ -27,6 +40,22 @@ build_features <- function(event_df, event) {
   bind_rows(player_dfs)
 }
 
+#' Get all Results for Candidate Receivers For A Pass Event
+#'
+#' Filters tracking frames to one event and match, labels attacking and
+#' defending players, expands the event into candidate intended receivers, builds
+#' XGBoost features with `calc_event_features()`, and applies a saved XGBoost
+#' model to produce per-player pass-success predictions.
+#'
+#' @param frames A tibble of tracking/event rows containing all matches and
+#'   events. Expected columns include `event_id`, `match_id`, `player_team`,
+#'   `team_id`, `object_id`, `x`, `y`, `ball_x_10frame_forward`, and
+#'   `ball_y_10frame_forward`.
+#' @param event The event identifier to score.
+#' @param match The match identifier containing `event`.
+#'
+#' @return A tibble with player coordinates and predicted probabilities for the
+#'   selected event. 
 get_results <- function(frames, event, match){
   event_df <- frames |> filter(event_id == event, match_id == match) |> mutate(
     player_side = ifelse(player_team == team_id, "ATTACK", ifelse(player_team == "BALL", "BALL", "DEFENSE"))
@@ -66,8 +95,9 @@ get_results <- function(frames, event, match){
     select(x, y, ball_x_10frame_forward, ball_y_10frame_forward, player_side, prediction)
   coord_df
 }
-feature_script <- "/home/lz80/soccer-decision-making-r/scripts/generate_xgb_features.r"
-feature_lines <- readLines(feature_script)#there is probably a better way to do this...
+#reading the feature generation script, there is probably a cleaner way to do this...
+feature_script <- "generate_xgb_features.r"
+feature_lines <- readLines(feature_script)
 cut_idx <- grep("^goal_coords", feature_lines)[1] - 1
 
 eval(parse(text = feature_lines[1:cut_idx]), envir = .GlobalEnv)
@@ -91,7 +121,7 @@ pitch_sportec <- list(
   origin_x = -52.5,
   origin_y = -34
 )
-
+#generate sample results, here we just take the passes from the first 2000 rows
 sample_events <- frames|> select(event_id, match_id) |> head(2000) |> unique()
 pdf("sample_results.pdf", width = 8, height = 6)
 c = 1
@@ -111,7 +141,6 @@ for (i in 1:nrow(sample_events)) {
   print(plot)
 }
 dev.off()
-
 
 
 
