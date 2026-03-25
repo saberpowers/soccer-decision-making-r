@@ -3,6 +3,23 @@ library(stringr)
 library(progress)
 library(xgboost)
 
+#' Join Feature Rows To Outcome Labels
+#'
+#' Filters the label table to either offensive or defensive targets and to
+#' either successful or unsuccessful passes, then inner-joins those labels onto
+#' the engineered feature table by event and match identifiers.
+#'
+#' @param feats A data frame of engineered pass features containing `EVENT_ID`
+#'   and `MUID`.
+#' @param labels A data frame of label rows containing `EVENT_ID`, `MUID`,
+#'   `complete`, and both `offense_xG` and `defense_xG`.
+#' @param offensive Logical; if `TRUE`, keep `offense_xG`, otherwise keep
+#'   `defense_xG`.
+#' @param successful Logical; if `TRUE`, keep completed passes, otherwise keep
+#'   incomplete passes.
+#'
+#' @return A data frame containing feature rows joined with the selected target
+#'   column.
 build_dataset <- function(feats, labels, offensive = TRUE, successful = TRUE) {
   if (offensive) {
     labels <- labels |> filter(complete == successful) |> select(EVENT_ID, MUID, offense_xG)
@@ -13,6 +30,18 @@ build_dataset <- function(feats, labels, offensive = TRUE, successful = TRUE) {
   feats |> inner_join(labels, by = c("EVENT_ID", "MUID"))
 }
 
+#' Build A Model Matrix And Target Vector
+#'
+#' Selects the requested XG target, removes identifier columns from the feature
+#' set, preserves missing values during formula processing, and returns a design
+#' matrix ready for XGBoost.
+#'
+#' @param passes A data frame produced by `build_dataset()`.
+#' @param offensive Logical; if `TRUE`, use `offense_xG` as the response,
+#'   otherwise use `defense_xG`.
+#'
+#' @return A list with `X` (numeric model matrix), `y` (target vector), and
+#'   `feature_cols` (expanded column names in `X`).
 prepare_training_matrix <- function(passes, offensive = TRUE) {
   label_col <- if (offensive) "offense_xG" else "defense_xG"
 
@@ -41,6 +70,21 @@ prepare_training_matrix <- function(passes, offensive = TRUE) {
 }
 
 
+#' Run Manual K-Fold Cross-Validation For XGBoost
+#'
+#' Randomly assigns rows to folds, trains an XGBoost regressor on each training
+#' split, evaluates on the held-out fold, and reports fold-level RMSE and MAE.
+#'
+#' @param X Numeric feature matrix.
+#' @param y Numeric response vector aligned with `X`.
+#' @param nfold Number of folds to evaluate.
+#' @param nrounds Maximum number of boosting rounds per fold.
+#' @param params Optional XGBoost parameter list. If `NULL`, a default
+#'   regression configuration is used.
+#' @param seed Integer seed used for fold assignment.
+#'
+#' @return A tibble with one row per fold and columns `fold`, `n_valid`, `rmse`,
+#'   and `mae`.
 run_kfold_cv <- function(X, y, nfold = 5, nrounds = 300, params = NULL, seed = 42) {
   if (is.null(params)) {
     params <- list(
@@ -103,6 +147,21 @@ run_kfold_cv <- function(X, y, nfold = 5, nrounds = 300, params = NULL, seed = 4
   bind_rows(fold_metrics)
 }
 
+#' Tune XGBoost Hyperparameters With Internal Cross-Validation
+#'
+#' Evaluates a fixed hyperparameter grid with `xgb.cv()`, tracks the best RMSE
+#' and boosting round for each configuration, and returns the best-performing
+#' parameter set.
+#'
+#' @param X Numeric feature matrix.
+#' @param y Numeric response vector aligned with `X`.
+#' @param nfold Number of folds passed to `xgb.cv()`.
+#' @param nrounds Maximum number of boosting rounds evaluated per grid row.
+#' @param early_stopping_rounds Early-stopping patience used by `xgb.cv()`.
+#' @param seed Integer seed used to stabilize each grid evaluation.
+#'
+#' @return A list with `best_params`, `best_round`, and `tuning_results`
+#'   ordered by performance.
 tune_hyperparams <- function(
   X,
   y,
@@ -188,6 +247,18 @@ tune_hyperparams <- function(
   )
 }
 
+#' Train A Final XGBoost Regression Model
+#'
+#' Fits an XGBoost regressor on the full design matrix using either supplied
+#' hyperparameters or the script defaults.
+#'
+#' @param X Numeric feature matrix.
+#' @param y Numeric response vector aligned with `X`.
+#' @param nrounds Number of boosting rounds to train.
+#' @param params Optional XGBoost parameter list. If `NULL`, a default
+#'   regression configuration is used.
+#'
+#' @return An `xgb.Booster` object trained on the full dataset.
 train_final_model <- function(X, y, nrounds = 300, params = NULL) {
   if (is.null(params)) {
     params <- list(
