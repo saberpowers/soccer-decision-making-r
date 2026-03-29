@@ -1,7 +1,4 @@
-library(dplyr)
-library(stringr)
-library(purrr)
-library(progress)
+RDF_PATH = "/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec/"
 
 #' Compute windowed cumulative xG for offensive or defensive context
 #'
@@ -46,10 +43,10 @@ calculate_xG <- function(frame, complement_xg, team, offense, n_next = 10) {
 
 #ran code:
 
-dir_path <- "/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec/KPI_Merged_all"
+dir_path <- paste0(RDF_PATH,"KPI_Merged_all")
 csv_files <- list.files(dir_path, pattern = "\\.csv$", full.names = TRUE)
 
-pb <- progress_bar$new(
+pb <- progress::progress_bar$new(
   format = "[:bar] :current/:total (:percent) eta: :eta elapsed: :elapsed",
   total = length(csv_files),
   clear = FALSE,
@@ -57,23 +54,23 @@ pb <- progress_bar$new(
   stream = stderr()
 )
 
-all_labels <- map_dfr(csv_files, function(f) {
+all_labels <- purrr::map_dfr(csv_files, function(f) {
   kpi_df <- read.csv(f, sep = ";") |>
-    mutate(
-      xG = as.numeric(str_replace(xG, ",", ".")),
+    dplyr::mutate(
+      xG = as.numeric(stringr::str_replace(xG, ",", ".")),
       complement_xG = 1 - xG
     ) |>
-    arrange(FRAME_NUMBER)
+    dplyr::arrange(FRAME_NUMBER)
   
   kpi_df <- kpi_df |>
-    mutate(
+    dplyr::mutate(
       offense_xG = calculate_xG(FRAME_NUMBER, complement_xG, CUID1, TRUE),
       defense_xG = calculate_xG(FRAME_NUMBER, complement_xG, CUID1, FALSE),
       complete = EVALUATION %in% c("successfullyComplete", "successful")
     ) |>
-    filter(SUBTYPE == "Pass") |>
-    select(EVENT_ID, MUID, offense_xG, defense_xG, complete)
+    dplyr::filter(SUBTYPE == "Pass") |>
+    dplyr::select(EVENT_ID, MUID, offense_xG, defense_xG, complete)
   pb$tick()
   kpi_df
 })
-write.csv(all_labels, "/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec/xgb_labels.csv", row.names = FALSE)
+write.csv(all_labels, paste0(RDF_PATH, "xgb_labels.csv"), row.names = FALSE)

@@ -8,6 +8,7 @@ library(purrr)
 library(progress)
 library(xgboost)
 library(bit64)
+RDF_PATH = "/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec/"
 
 #' Expand One Pass Event Into Receiver Candidates
 #'
@@ -78,8 +79,9 @@ get_results <- function(frames, event, match){
       }
     )
   })
+  
   feats_mat <- feats_all |> select(-c("event_id", "match_id")) |> xgb.DMatrix()
-  model <- xgb.load("/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec/xgb_offense_successful.json")
+  model <- xgb.load(paste0(RDF_PATH, "xgb_offense_successful.json"))
   preds <- predict(model, feats_mat)
   results <- feats_all |> select(event_id, match_id) |>
     separate(
@@ -103,7 +105,7 @@ cut_idx <- grep("^goal_coords", feature_lines)[1] - 1
 eval(parse(text = feature_lines[1:cut_idx]), envir = .GlobalEnv)
 goal_coords <- c(x = 52.5, y = 0)
 
-frames <- read_parquet("/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec/passes.parquet") |> filter(is.na(set_piece_type)) |> mutate(
+frames <- read_parquet(paste0(RDF_PATH, "passes.parquet")) |> filter(is.na(set_piece_type)) |> mutate(
   x_velo = x_p5 - x_m5,
   y_velo = y_p5 - y_m5
 )
@@ -124,7 +126,6 @@ pitch_sportec <- list(
 #generate sample results, here we just take the passes from the first 2000 rows
 sample_events <- frames|> select(event_id, match_id) |> head(2000) |> unique()
 pdf("sample_results.pdf", width = 8, height = 6)
-c = 1
 for (i in 1:nrow(sample_events)) {
   row_data <- sample_events[i, ]
   event <- row_data$event_id
@@ -136,9 +137,6 @@ for (i in 1:nrow(sample_events)) {
     nudge_y = 1.5,
     size = 3
   ) + theme_pitch() 
-  c = c + 1
-  print(paste0(c, "/", nrow(sample_events)))
-  print(plot)
 }
 dev.off()
 

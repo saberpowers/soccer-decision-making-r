@@ -1,8 +1,4 @@
-library(dplyr)
-library(stringr)
-library(progress)
-library(xgboost)
-
+RDF_PATH = "/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec/"
 #' Join Feature Rows To Outcome Labels
 #'
 #' Filters the label table to either offensive or defensive targets and to
@@ -22,12 +18,12 @@ library(xgboost)
 #'   column.
 build_dataset <- function(feats, labels, offensive = TRUE, successful = TRUE) {
   if (offensive) {
-    labels <- labels |> filter(complete == successful) |> select(EVENT_ID, MUID, offense_xG)
+    labels <- labels |> dplyr::filter(complete == successful) |> dplyr::select(EVENT_ID, MUID, offense_xG)
   } else {
-    labels <- labels |> filter(complete == successful) |> select(EVENT_ID, MUID, defense_xG)
+    labels <- labels |> dplyr::filter(complete == successful) |> dplyr::select(EVENT_ID, MUID, defense_xG)
   }
 
-  feats |> inner_join(labels, by = c("EVENT_ID", "MUID"))
+  feats |> dplyr::inner_join(labels, by = c("EVENT_ID", "MUID"))
 }
 
 #' Build A Model Matrix And Target Vector
@@ -64,7 +60,7 @@ prepare_training_matrix <- function(passes, offensive = TRUE) {
 
   list(
     X = X,
-    y = model_df[[label_col]],
+    y = model_df[[label_col]], 
     feature_cols = colnames(X)
   )
 }
@@ -102,7 +98,7 @@ run_kfold_cv <- function(X, y, nfold = 5, nrounds = 300, params = NULL, seed = 4
   fold_id <- sample(rep(seq_len(nfold), length.out = nrow(X)))
   fold_metrics <- vector("list", nfold)
 
-  pb <- progress_bar$new(
+  pb <- progress::progress_bar$new(
     format = "CV [:bar] :current/:total (:percent) eta: :eta elapsed: :elapsed fold=:fold rmse=:rmse",
     total = nfold,
     clear = FALSE,
@@ -111,14 +107,13 @@ run_kfold_cv <- function(X, y, nfold = 5, nrounds = 300, params = NULL, seed = 4
   )
 
   for (fold in seq_len(nfold)) {
-    print("new_fold")
     valid_idx <- which(fold_id == fold)
     train_idx <- which(fold_id != fold)
 
-    dtrain <- xgb.DMatrix(data = X[train_idx, , drop = FALSE], label = y[train_idx])
-    dvalid <- xgb.DMatrix(data = X[valid_idx, , drop = FALSE], label = y[valid_idx])
+    dtrain <- xgboost::xgb.DMatrix(data = X[train_idx, , drop = FALSE], label = y[train_idx])
+    dvalid <- xgboost::xgb.DMatrix(data = X[valid_idx, , drop = FALSE], label = y[valid_idx])
 
-    model <- xgb.train(
+    model <- xgboost::xgb.train(
       params = params,
       data = dtrain,
       nrounds = nrounds,
@@ -131,7 +126,7 @@ run_kfold_cv <- function(X, y, nfold = 5, nrounds = 300, params = NULL, seed = 4
     fold_rmse <- sqrt(mean((pred - y[valid_idx])^2))
     fold_mae <- mean(abs(pred - y[valid_idx]))
 
-    fold_metrics[[fold]] <- tibble(
+    fold_metrics[[fold]] <- tibble::tibble(
       fold = fold,
       n_valid = length(valid_idx),
       rmse = fold_rmse,
@@ -170,7 +165,7 @@ tune_hyperparams <- function(
   early_stopping_rounds = 100,
   seed = 42
 ) {
-  dtrain <- xgb.DMatrix(data = X, label = y)
+  dtrain <- xgboost::xgb.DMatrix(data = X, label = y)
 
   grid <- expand.grid(
     eta = c(0.03, 0.05, 0.1),
@@ -186,7 +181,7 @@ tune_hyperparams <- function(
     eval_metric = "rmse"
   )
 
-  pb <- progress_bar$new(
+  pb <- progress::progress_bar$new(
     format = "Tuning [:bar] :current/:total (:percent) eta: :eta elapsed: :elapsed rmse=:rmse",
     total = nrow(grid),
     clear = FALSE,
@@ -197,12 +192,11 @@ tune_hyperparams <- function(
   results <- vector("list", nrow(grid))
 
   for (i in seq_len(nrow(grid))) {
-    print(i)
     row <- grid[i, ]
     params <- c(base_params, as.list(row))
 
     set.seed(seed + i)
-    cv <- xgb.cv(
+    cv <- xgboost::xgb.cv(
       params = params,
       data = dtrain,
       nrounds = nrounds,
@@ -214,7 +208,7 @@ tune_hyperparams <- function(
     best_round <- if (!is.null(cv$best_iteration)) cv$best_iteration else nrounds
     best_rmse <- if (!is.null(cv$best_score)) as.numeric(cv$best_score) else min(cv$evaluation_log$test_rmse_mean, na.rm = TRUE)
 
-    results[[i]] <- tibble(
+    results[[i]] <- tibble::tibble(
       eta = row$eta,
       max_depth = row$max_depth,
       subsample = row$subsample,
@@ -227,8 +221,8 @@ tune_hyperparams <- function(
     pb$tick(tokens = list(rmse = sprintf("%.5f", best_rmse)))
   }
 
-  tuning_results <- bind_rows(results) |> arrange(best_rmse, best_round)
-  best <- tuning_results |> slice(1)
+  tuning_results <- dplyr::bind_rows(results) |> dplyr::arrange(best_rmse, best_round)
+  best <- tuning_results |> dplyr::slice(1)
 
   best_params <- list(
     objective = "reg:squarederror",
@@ -272,9 +266,9 @@ train_final_model <- function(X, y, nrounds = 300, params = NULL) {
     )
   }
 
-  dtrain <- xgb.DMatrix(data = X, label = y)
+  dtrain <- xgboost::xgb.DMatrix(data = X, label = y)
 
-  xgb.train(
+  xgboost::xgb.train(
     params = params,
     data = dtrain,
     nrounds = nrounds,
@@ -282,48 +276,55 @@ train_final_model <- function(X, y, nrounds = 300, params = NULL) {
   )
 }
 
-feats <- read.csv("/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec/xgb_features.csv") |>
-  rename(
+#' Convert Objects To Single-String Log Output
+#'
+#' @param x Any R object.
+#'
+#' @return A length-1 character string suitable for `logger::log_info()`.
+format_for_log <- function(x) {
+  paste(utils::capture.output(print(x)), collapse = "\n")
+}
+
+feats <- read.csv(paste0(RDF_PATH, "xgb_features.csv")) |>
+  dplyr::rename(
     EVENT_ID = event_id,
     MUID = match_id
   ) |>
-  mutate(
-    MUID = str_sub(MUID, 1, -4 - 1)
+  dplyr::mutate(
+    MUID = stringr::str_sub(MUID, 1, -4 - 1)
   )
 
-labels <- read.csv("/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec/xgb_labels.csv")
+labels <- read.csv(paste0(RDF_PATH,"xgb_labels.csv"))
 passes <- build_dataset(feats, labels, offensive = TRUE)
-print("built dataset")
+logger::log_info("built dataset")
 prepared <- prepare_training_matrix(passes)
 X <- prepared$X
 y <- prepared$y
 
 nfold <- 5
-tuning_nrounds <- 1000
-print("beginning hyperparameter tuning")
+tuning_nrounds <- 10
+logger::log_info("beginning hyperparameter tuning")
 tuned <- tune_hyperparams(
   X,
   y,
   nfold = nfold,
   seed = 42
 )
-
-print("top tuning results")
-print(head(tuned$tuning_results, 10))
-print("Best RMSE")
-print(tuned$tuning_results |> select("best_rmse"))
-print("selected params")
-print(tuned$best_params)
-print(sprintf("selected best_round=%d", tuned$best_round))
+best_rmse <- tuned$tuning_results |> dplyr::select("best_rmse") |> dplyr::pull(1)
+logger::log_info("Best RMSE")
+logger::log_info(best_rmse)
+logger::log_info("selected params")
+logger::log_info(format_for_log(tuned$best_params))
+logger::log_info(sprintf("selected best_round=%d", tuned$best_round))
 
 final_model <- train_final_model(X, y, nrounds = tuned$best_round, params = tuned$best_params)
-xgb.save(final_model, "/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec/xgb_offense_successful.json")
+xgb.save(final_model, paste0(RDF_PATH, "xgb_offense_successful.json"))
 write.csv(
   tuned$tuning_results,
-  "/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec/xgb_offense_successful_tuning_results.csv",
+  paste0(RDF_PATH, "xgb_offense_successful_tuning_results.csv"),
   row.names = FALSE
 )
 writeLines(
   as.character(tuned$best_round),
-  "/home/lz80/rdf/sp161/shared/soccer-decision-making-r/sportec/xgb_offense_successful_best_round.txt"
+  paste0(RDF_PATH, "xgb_offense_successful_best_round.txt")
 )
